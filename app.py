@@ -1,6 +1,6 @@
 import torch
 from torch import autocast
-from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
+from diffusers import DiffusionPipeline
 import base64
 from io import BytesIO
 import os
@@ -8,28 +8,44 @@ import os
 def init():
     global model
     HF_AUTH_TOKEN = os.getenv("HF_AUTH_TOKEN")
-    repo = 'stabilityai/stable-diffusion-2-1-base'
-    scheduler = DPMSolverMultistepScheduler.from_pretrained(repo, subfolder="scheduler")
-    model = DiffusionPipeline.from_pretrained(repo, torch_dtype=torch.float16, revision="fp16", scheduler=scheduler, use_auth_token=HF_AUTH_TOKEN).to("cuda")    
+    model = DiffusionPipeline.from_pretrained(
+        "nitrosocke/Future-Diffusion",
+        torch_dtype=torch.float16
+    ).to('cuda')
+
+def _generate_latent(height, width, seed=None, device="cuda"):
+    generator = torch.Generator(device=device)
+
+    # Get a new random seed, store it and use it as the generator state
+    if not seed:
+        seed = generator.seed()
+    generator = generator.manual_seed(seed)
+    
+    image_latent = torch.randn(
+        (1, model.unet.in_channels, height // 8, width // 8),
+        generator = generator,
+        device = device
+    )
+    return image_latent.type(torch.float16)
+    
 
 def inference(model_inputs:dict):
     global model
 
-    prompt = model_inputs.get('prompt', None)
-    height = model_inputs.get('height', 768)
-    width = model_inputs.get('width', 768)
-    steps = model_inputs.get('steps', 20)
-    guidance_scale = model_inputs.get('guidance_scale', 9)
-    seed = model_inputs.get('seed', None)
-
-    if not prompt: return {'message': 'No prompt was provided'}
-    
-    generator = None
-    if seed: generator = torch.Generator("cuda").manual_seed(seed)
-    
+    latent = _generate_latent(64*6, 64*6)
     with autocast("cuda"):
-        image = model(prompt, guidance_scale=guidance_scale, height=height, width=width, num_inference_steps=steps, generator=generator).images[0]
-    
+            images = model(
+        prompt = "future style "+ model_inputs.get('prompt', None) +" cinematic lights, trending on artstation, avengers endgame, emotional",
+        height=64*6,
+        width=64*6,
+        num_inference_steps = 20,
+        guidance_scale = 7.5,
+        negative_prompt="duplicate heads bad anatomy extra legs text",
+        num_images_per_prompt = 1,
+        return_dict=False,
+        latents = latent
+    )
+    image = images[0][0]
     buffered = BytesIO()
     image.save(buffered, format="JPEG")
     image_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
